@@ -1,0 +1,140 @@
+#! /bin/bash
+
+#
+# This wrapper uses pdfocr - a ruby based OCR conversion tool
+#
+#
+# Usage: pdfocr -i input.pdf -o output.pdf
+# pdfocr adds text to PDF files using the ocropus, cuneiform, or tesseract OCR software
+#    -i, --input [FILE]               Specify input PDF file
+#    -o, --output [FILE]              Specify output PDF file
+#    -t, --tesseract                  Use tesseract as the OCR engine (default)
+#    -c, --cuneiform                  Use cuneiform as the OCR engine
+#    -p, --ocropus                    Use ocropus as the OCR engine
+#    -l, --lang [LANG]                Specify language for the OCR software
+#    -w, --workingdir [DIR]           Specify directory to store temp files in
+#    -k, --keep                       Keep temporary files around
+#    -h, --help                       Show this message
+#    -v, --version                    Show version
+#
+#
+#
+
+
+PREFIX=`mktemp -t -d img2pdf.XXXXXXXXXX`
+trap 'rm -rf $PREFIX' EXIT
+
+#list files only breaking on new lines (not spaces in file names)
+IFS=$'\n'
+directory="$(pwd)"
+umask 0002
+
+#Log file details
+tmpFile=/tmp/ocrmypdf.log
+www="/var/www/ocrmypdf/"
+logFile=$www/ocrmypdf.log
+
+#initialize variables
+infile=
+outfile=
+webstatus="false"
+engine=0
+lang="--lang eng"
+
+#Supported languages: eng ger fra rus swe spa ita ruseng ukr srp hrv pol dan por dut cze rum hun bul slo lav lit est tur
+lang="eng"
+
+#display usage statement
+function displayusage {
+	echo "Usage: $0 -i input-file -o output-file"
+	echo "input-file must be .pdf"
+        echo "Required"
+        echo "     -i input file"
+        echo "     -o output file"
+        echo "     -e engine (0,1,2)"
+        echo "Options"
+        echo "     -m web status monitoring"
+        echo "     -l lang (Default english ) "
+	exit 2
+}
+
+#update web status
+function updatestatus {
+if [ "$1" = "true" ]; then
+	cat $tmpFile | sort -n > $logFile
+fi
+}
+
+#check to make sure old files are not overwriten
+function dontoverwrite {
+    outbase=$(basename $2)
+    outdir=$(dirname $2)
+	if [ -e $2 ]; then
+        dtstamp=$(date +%s)
+        	mv $1 "$outdir/$dtstamp.$outbase"
+        	echo $$ $(date) Finished moving $outdir/$dtstamp.$outbase "<br>" >> $tmpFile
+        else
+                mv $1 $2
+                echo $$ $(date) Finished moving $2 "<br>" >> $tmpFile
+        fi
+}
+
+
+# Verify command line options and values
+# Display an error message if the input is not correct
+while getopts i:o:e:l:m flag
+do      case "$flag" in
+        i)      infile="$OPTARG";;
+        o)      outfile="$OPTARG";;
+        m)      webstatus="true";;
+	e)	engine=$OPTARG;; 
+	l)	lang=--lang $OPTARG;; 
+        ?)      displayusage;;
+        esac
+done
+
+echo Engine selected is $engine
+
+if [ $engine -eq 0  ]; then
+	engine="--tesseract"
+elif [ $engine -eq 1  ]; then
+	engine="--cuneiform"
+elif [ $engine -eq 2  ]; then
+	engine="--ocropus"
+else
+	engine="--tesseract"
+fi
+
+
+if [[ -z "$infile" || -z "$outfile" ]]; then
+	echo "Need both infile and outfile to exist"
+        displayusage
+fi
+
+echo Engine $engine $infile $outfile $webstatus
+
+#begin processing file - take a temp copy so that the caller can dlete the original and get on with processing.
+
+basenm=$(basename $infile)
+cp $infile $PREFIX/
+infile=$PREFIX/$basenm
+
+updatestatus $webstatus
+
+echo $engine
+echo pdfocr  $engine -i $infile -o $PREFIX/$basenm.searchable.pdf $lang -w $PREFIX
+pdfocr  $engine -i $infile -o $PREFIX/$basenm.searchable.pdf $lang -w $PREFIX
+if [ -e  $PREFIX/$basenm.searchable.pdf ]; then 
+	dontoverwrite $PREFIX/$basenm.searchable.pdf $outfile
+	echo Converted ok
+	echo $$ $(date) Finished processing $outfile "<br>" >> $tmpFile
+else
+	
+	echo Cant find the 
+	echo $$ $(date) The file $infile didnt convert by PDFOCR  "<br>" >> $tmpFile
+fi
+
+#cleanup
+rm -rf $PREFIX/*
+
+updatestatus $webstatus

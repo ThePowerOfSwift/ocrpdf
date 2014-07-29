@@ -1,0 +1,201 @@
+#! /bin/bash
+#
+#	OCR My PDF - main watch folder script that runs from the server and starts from the web dashboard 
+#
+#	This script comes from watchocr project. watchocr.com I liked how it works so I am using it 
+#	to monitor the incoming PDF folder.  It will continue to execute the img2pdf command script - but
+#	that is a wrapper for pdfocr - a RUBY based convertor which can use different OCR engines.   
+#
+#
+#setup environment
+
+PREFIX=`mktemp -t -d ocrmypdf.XXXXXXXXXX`
+trap 'rm -rf $PREFIX' EXIT
+
+#list files only breaking on new lines (not spaces in file names)
+IFS=$'\n'
+directory="$(pwd)"
+# Set location of WWW
+www="/var/www/ocrmypdf"
+tmpFile="/tmp/ocrmypdf.log"
+logFile="$www/ocrmypdf.log"
+
+echo  $logFile
+
+cd $outfolder
+umask 0002
+
+#initialize variables
+infolder=
+outfoler=
+preserve=
+webstatus=
+engine=1
+deskew=
+res="300"
+renamebyzxing=
+autorotate=
+maxProcesses=4
+
+#display usage statement
+function displayusage {
+	echo "Usage: $0 -i input-directory -o output-directory"
+        echo "Required"
+        echo "     -i input directory"
+        echo "     -o output directory"
+        echo "     -e OCR Engine ( 0,1,2 )"
+        echo "Options"
+        echo "     -m web status monitoring"
+        echo "     -p preserve originals-directory"
+	exit 2
+}
+
+#update web status
+function updatestatus {
+if [ "$1" = "-m" ]; then
+	cat $tmpFile | sort -n > $logFile
+fi
+}
+
+#check to make sure old files are not overwriten
+function dontoverwrite {
+    basenm=$(basename $1)
+	if [ -e $2$basenm ]; then
+        dtstamp=$(date +%s)
+        	mv $1 $2$dtstamp.$basenm
+        	echo $$ $(date) Moved file to $2$dtstamp.$basenm "<br>" >> $tmpFile
+        else
+                mv $1 $2$basenm
+                echo $$ $(date) Moved file to $2$basenm "<br>" >> $tmpFile
+        fi
+}
+
+# Verify command line options and values
+# Display an error message if the input is not correct
+while getopts e:i:o:p:m flag
+	#echo $flag $OPTARG
+do      case "$flag" in
+        e)	engine="$OPTARG";;
+        i)      infolder="$OPTARG";;
+        o)      outfolder="$OPTARG";;
+        p)      preserve="$OPTARG";;
+        m)      webstatus="-m";;
+        ?)      displayusage;;
+        esac
+done
+
+if [[ -z "$infolder" || -z "$outfolder" ]]; then
+        displayusage
+fi
+
+if [ "${infolder#${infolder%?}}" != "/" ];then
+        infolder=$infolder/
+fi
+
+if [ "${infolder:0:1}" != "/" ];then
+	infolder=$directory/$infolder
+	echo $infolder
+fi
+
+if [ "${outfolder#${outfolder%?}}" != "/" ];then
+        outfolder=$outfolder/
+fi
+
+if [ "${outfolder:0:1}" != "/" ];then
+        outfolder=$directory/$outfolder
+	echo $outfolder
+fi
+
+if [ "${preserve#${preserve%?}}" != "/" ] && [ -n "$preserve" ];then
+        preserve=$preserve/
+fi
+
+if [ "${preserve:0:1}" != "/" ] && [ -n "$preserve" ];then
+        preserve=$directory/$preserve
+	echo $preserve
+fi
+
+
+
+#initalize log files
+echo "" > $tmpFile
+
+updatestatus $webstatus
+
+#watched folder loop - this is good!
+
+
+echo "Processing PDF Files"
+ 
+
+while [ 1 ]
+do
+
+#look for new files and process them
+
+
+#process and convert .pdf files
+for file in $(find $infolder -iname "*.pdf" )
+        do
+		filestructure=${file/$infolder/}
+                filestructure=$(dirname $filestructure)/
+
+		if [ $(lsof -t $file | wc -l) -ge 1 ];then
+                        echo "File $file still being written, skipping"
+                else
+			hash1=$(md5sum $file)
+			sleep 5
+			hash2=$(md5sum $file)
+                	if [ ! "$hash1" = "$hash2" ];then
+                        	echo "File $file still being written, skipping"
+                	else
+                        	echo "File $file being processed..."
+				echo mkdir -p $PREFIX/$filestructure
+				mkdir -p $PREFIX/$filestructure
+				echo $$ $(date) Processing $file ... "<br>" >> $tmpFile
+				updatestatus $webstatus
+				echo $file $PREFIX/$filestructure
+				cp $file $PREFIX/$filestructure
+				if [ -n "$preserve" ]; then
+					echo "Preserving file"
+					mkdir -p $preserve$filestructure
+					dontoverwrite $file $preserve$filestructure
+				else
+					echo "Deleting file"
+					rm -rf $file
+				fi
+			fi
+		fi
+	done
+
+#Process each pdf indepentantly
+for file in $(find $PREFIX -iname "*.pdf" )
+        do
+		filestructure=${file/$PREFIX/}
+                filestructure=$(dirname $filestructure)
+
+		while [ 1 ]
+			do
+				numLines=$(jobs | wc -l)
+				if [ "$numLines" -lt "$maxProcesses" ]; then
+					break
+				fi
+				sleep 1
+			done
+
+		basenm=$(basename $file)
+		mkdir -p $outfolder$filestructure
+		echo Outfolder: $outfolder
+		cd $outfolder
+		echo img2pdf -i $file -o "$outfolder$filestructure/$basenm" $webstatus -e $engine  &
+		$www/bin/img2pdf -i $file -o "$outfolder$filestructure/$basenm" $webstatus -e $engine  &
+		echo sleep for 5 and delete local copy
+ 		sleep 5
+		echo deleting file: $file
+		rm -f $file
+        done
+
+sleep 5
+
+# End main infinite loop here just in case you wondered.
+done
